@@ -1,0 +1,39 @@
+---
+title: Music Recommender System Architecture
+---
+flowchart TD
+    note["Input: listening profile + songs.csv<br>Process: score, retrieve, generate, verify<br>Output: recommendation + grounded explanation"]
+
+    U["User<br>(CLI main.py / Streamlit app.py)"] -->|listening profile + songs.csv| LOAD["Loader<br>recommender.load_songs()"]
+
+    LOAD --> SCORE["Recommender<br>recommender.recommend_songs()<br>(feature-weighted scoring)"]
+
+    subgraph RAG["RAG Explanation Pipeline (explain.py)"]
+        direction TB
+        RET["Retriever<br>retrieval.KnowledgeBase<br>(TF-IDF over genre/mood/song notes)"]
+        GEN["Generator<br>Claude API call<br>(explanation constrained to retrieved docs)"]
+        GROUND{"Groundedness Check<br>groundedness.score_groundedness()"}
+        FALLBACK["Deterministic Fallback Explanation<br>(always-safe, no LLM)"]
+
+        RET -->|retrieved documents| GEN
+        GEN --> GROUND
+        GROUND -->|grounded| OUT_EXP["Final Explanation"]
+        GROUND -->|not grounded / API unavailable| FALLBACK
+        FALLBACK --> OUT_EXP
+    end
+
+    SCORE -->|top-N recommended songs| RAG
+    SCORE -->|match reasons & scores| GEN
+
+    OUT_EXP --> RESULT["Recommendation + Explanation"]
+    RESULT --> U
+
+    subgraph HUMAN["Human-in-the-loop / Testing"]
+        direction TB
+        REVIEW["Human review of explanations<br>(manual spot-check in Streamlit UI)"]
+        TESTS["Automated tests<br>(unit tests on scoring, retrieval,<br>groundedness thresholds)"]
+    end
+
+    RESULT -.->|user reads & judges quality| REVIEW
+    GROUND -.->|automated acceptance gate| TESTS
+    TESTS -.->|pass/fail feedback| RAG

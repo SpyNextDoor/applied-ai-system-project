@@ -1,432 +1,219 @@
-# 🎵 Music Recommender Simulation
+# 🎵 Music Recommender with Grounded AI Explanations
 
-## Project Summary
+## Original Project
 
-A small music recommender system that represents songs and a user "taste profile" as data, scores songs against that profile, and evaluates what the resulting recommendations get right and wrong.
-
----
-
-## How The System Works
-
-**Real world song suggestions**
-
-In the real world, streaming platforms use a combination of collaborative filtering (CF) and content-based filtering (CBF) to recommend songs that a user might enjoy based on what they are currently playing. If a user's song matches other users, CF assumes that this user might like what those other users are listening to. On the other side, CBF uses the song's metadata such as mood, genre, and danceability to recommend songs that closely align with the user's preferences. A combination of these casts a wide net for recommendations to a user.
-
-**My design**
-
-My recommender uses pure content-based filtering: it compares each song's audio features against the user's preferred values and scores how close the match is, rather than looking at what other users listened to. Each numeric feature gets its own distance-based score between 0 and 1, these are combined into a weighted total, and then a genre or mood match adds a small bonus on top. This keeps the scoring rule (how good is this one song for this user) separate from the ranking rule (sort all scored songs and return the top N).
-
-- **Features used**: `energy`, `valence`, `danceability`, `acousticness`, and `tempo_bpm` (normalized), compared against the user's preferred value for each.
-- **Scoring formula per feature**: `score = 1 - |song_value - user_preference|`, since these features already sit on a 0–1 scale.
-- **Tempo scoring**: `tempo_bpm` isn't 0–1, so it's normalized by the catalog's range first: `score = 1 - |song_tempo - user_preferred_tempo| / (max_tempo - min_tempo)`.
-- **Total score**: a weighted sum of the five feature scores, `total_score = w1*score_energy + w2*score_valence + w3*score_danceability + w4*score_acousticness + w5*score_tempo`, with weights summing to 1.0 so the base score stays interpretable as a 0–1 similarity.
-- **Genre and mood bonuses**: a flat `+0.15` is added if `genre` matches the user's preference, and `+0.05` if `mood` matches. Genre is weighted higher than mood because it reflects a more stable, long-term taste signal, while mood is more situational.
-- **Final score is clamped** at 1.0 so it stays readable as a similarity percentage even after bonuses are added.
-- **Ranking**: once every song has a final score, songs are sorted in descending order and the top N are returned as recommendations.
-
-**Algorithm Recipe**
-
-1. Start with every song in the catalog — no pre-filtering.
-2. For each numeric feature, compute a per-feature score (distance-based, normalized for tempo).
-3. Combine into a weighted base score (weights sum to 1.0).
-4. Apply genre (+0.15) and mood (+0.05) bonuses.
-5. Clamp the final score to a max of 1.0 (and min of 0.0, to be safe).
-6. Rank all songs by final score, descending.
-7. **Tie-breaking** (when two songs have the same final score):
-   * Prefer the song whose `genre` matches the user's preferred genre.
-   * If still tied, prefer the song whose `energy` is closer to the user's preferred energy (smaller `abs(song_energy - user_energy)` wins).
-8. Return the top N songs as the recommendation list.
-9. **NB: Bias** --> my design prioritizes genre because mood is something that changes, but listeners are usually committed to a particular genre.
+This project builds on **Music Recommender Simulation**, my project from Modules 1–3. The
+original goal was a pure content-based filtering recommender: it represents songs and a
+user "taste profile" as weighted audio features (energy, valence, danceability,
+acousticness, tempo) plus genre/mood bonuses, scores every song in a small catalog against
+a profile, and returns the top matches with a short list of deterministic "match reasons"
+(e.g. `"energy match, genre match"`). It also included a multi-profile evaluation,
+including adversarial edge cases, to probe where the simple scoring logic breaks down.
 
 ---
 
-## Getting Started
+## Title and Summary
 
-### Setup
+**Music Recommender with Grounded AI Explanations** takes that original scorer and adds a
+retrieval-augmented generation (RAG) layer on top: instead of only printing a terse,
+rule-based reason for each recommendation, it now asks Claude to explain the
+recommendation in plain language — but only using facts retrieved from a small local
+knowledge base, and only after checking that the generated text is actually grounded in
+those facts. This matters because natural-language explanations make recommendations more
+trustworthy and easier to act on, but an ungrounded LLM explanation (one that invents
+details about a fictional song or artist) would be worse than no explanation at all. The
+system is built so that it degrades safely: if there's no API key, the API fails, or the
+generated text isn't grounded, the user still gets a correct, if plainer, explanation
+instead of a crash or a hallucination.
 
-1. Create a virtual environment (optional but recommended):
+---
+
+## Architecture Overview
+
+See [`diagrams/architecture.mmd`](diagrams/architecture.mmd) for the full diagram. At a
+high level:
+
+1. **Input**: a user's listening profile (genre, mood, numeric feature targets) and the
+   song catalog (`data/songs.csv`), entered via the CLI (`src/main.py`) or the Streamlit
+   UI (`src/app.py`).
+2. **Score**: `recommender.recommend_songs()` scores and ranks every song using the
+   feature-weighted similarity described below, producing a score and a list of match
+   reasons per song.
+3. **Retrieve**: for each recommended song, `retrieval.KnowledgeBase` uses TF-IDF
+   (scikit-learn) over a small local corpus (`data/knowledge/*.json` — one note per song,
+   genre, and mood) to pull the most relevant notes.
+4. **Generate**: `explain.py` builds a prompt from *only* the retrieved notes, the
+   computed score, and the computed match reasons, and asks Claude to explain the
+   recommendation in 1–2 sentences.
+5. **Verify**: `groundedness.py` checks what fraction of the generated explanation's
+   words are actually backed by the retrieved notes and match reasons. Below a threshold
+   (`0.6`), the explanation is discarded.
+6. **Fallback**: a deterministic, LLM-free explanation (built straight from the
+   computed match reasons) is always available and is used whenever the API key is
+   missing, the API call fails, the model returns nothing, or the groundedness check
+   fails.
+7. **Output**: the final recommendation + explanation is returned to the user, and every
+   step (retrieval, generation, fallback, groundedness score) is logged to
+   `logs/app.log` for auditing.
+
+---
+
+## Setup Instructions
+
+1. Create and activate a virtual environment (optional but recommended):
 
    ```bash
    python -m venv .venv
-   source .venv/bin/activate      # Mac or Linux
+   source .venv/bin/activate      # Mac/Linux
    .venv\Scripts\activate         # Windows
    ```
-2. Install dependencies
+2. Install dependencies:
 
-```bash
-pip install -r requirements.txt
-```
-
+   ```bash
+   pip install -r requirements.txt
+   ```
 3. (Optional) Enable AI-generated explanations by setting an Anthropic API key:
 
-```bash
-export ANTHROPIC_API_KEY="your-key-here"   # Mac/Linux
-set ANTHROPIC_API_KEY=your-key-here        # Windows
-```
+   ```bash
+   export ANTHROPIC_API_KEY="your-key-here"   # Mac/Linux
+   set ANTHROPIC_API_KEY=your-key-here        # Windows
+   ```
 
-   This step is optional. Without a key, the app still runs correctly and prints a
-   deterministic, rule-based explanation for every recommendation — see
-   [AI Features](#-ai-features-rag-powered-explanations) below.
+   This step is optional — without a key, the app still runs correctly and prints a
+   deterministic, rule-based explanation for every recommendation.
+4. Run the CLI app (evaluates several built-in user profiles, including adversarial
+   edge cases):
 
-4. Run the app:
+   ```bash
+   PYTHONPATH=src python src/main.py
+   ```
+5. Or run the Streamlit web UI:
 
-```bash
-PYTHONPATH=src python src/main.py
-```
+   ```bash
+   PYTHONPATH=src streamlit run src/app.py
+   ```
+6. Run the test suite (all tests run offline, no API key required):
 
-### Running Tests
-
-Run the full test suite (including the retrieval/groundedness/explanation tests, all of
-which run offline with no API key required) with:
-
-```bash
-pytest
-```
-
-You can add more tests in `tests/test_recommender.py`, `tests/test_retrieval.py`,
-`tests/test_groundedness.py`, or `tests/test_explain.py`.
+   ```bash
+   pytest
+   ```
 
 ---
 
-## 🤖 AI Features: RAG-Powered Explanations
+## Sample Interactions
 
-Beyond the deterministic `score_song` reasons (e.g. `"energy match, genre match"`), each
-recommendation also gets a natural-language explanation generated with
-**retrieval-augmented generation (RAG)**. This is fully wired into the main recommendation
-flow in `src/main.py` — it's not a side script — and it changes what gets printed for
-every recommendation.
-
-**Pipeline** (`src/retrieval.py` → `src/explain.py` → `src/groundedness.py`):
-
-1. **Retrieve.** `KnowledgeBase` (`src/retrieval.py`) loads a small local corpus —
-   one note per song, one per genre, one per mood (`data/knowledge/*.json`) — and
-   indexes it with TF-IDF (`scikit-learn`). For a given recommendation, it returns the
-   song's own note plus the most similar genre/mood notes by cosine similarity.
-2. **Generate.** `src/explain.py` builds a prompt containing *only* the retrieved notes,
-   the computed score, and the computed match reasons, then asks Claude to explain the
-   recommendation in 1-2 sentences using only those facts — not general knowledge about
-   the (fictional) song or artist.
-3. **Validate (reliability guardrail).** `src/groundedness.py` checks the generated text
-   against an "allowed vocabulary" built from the retrieved notes and match reasons, and
-   scores what fraction of the explanation's words are actually backed by that source
-   material. If the score falls below a threshold (default `0.6`), the explanation is
-   considered hallucinated and is swapped out for a safe, deterministic fallback before
-   it's ever shown.
-
-**Guardrails for reproducibility:**
-- No `ANTHROPIC_API_KEY`? The app logs this once and uses the deterministic fallback for
-  every explanation — it never crashes or blocks on a missing key.
-- API call fails (network, rate limit, etc.)? The exception is logged and the
-  deterministic fallback is used for that recommendation.
-- Generated explanation isn't grounded in the retrieved facts? It's replaced before
-  display, and the swap is logged and shown inline as `[UNGROUNDED, reverted to fallback]`.
-
-All of this is logged to `logs/app.log` (INFO and above) — every retrieval, every
-fallback, every groundedness failure — so you can audit what the system actually did on
-a given run. Only warnings and above also print to the console, so normal runs stay readable.
-
----
-
-## Sample Recommendation Output
+**1. High-Energy Pop profile, with `ANTHROPIC_API_KEY` set (grounded LLM explanation):**
 
 ```
-==================================================
-TOP RECOMMENDATIONS
-==================================================
-
-1. Requiem for Dawn (by Dmitri Volkov)
-   Score:   0.90
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match
-
-2. Tears in the Hallway (by Keisha Johnson)
-   Score:   0.89
-   Reasons: energy match, valence match, tempo match
-
-3. Emerald Hills (by Siobhan O'Malley)
-   Score:   0.87
-   Reasons: energy match, danceability match, acousticness match, tempo match
-
-4. Focus Flow (by LoRoom)
-   Score:   0.84
-   Reasons: energy match, acousticness match, tempo match
-
-5. Dust Road Letters (by Marcus Bellweather)
-   Score:   0.84
-   Reasons: energy match, acousticness match
-
-==================================================
-```
-
----
-
-## System Evaluation: Multiple User Profiles
-
-`src/main.py` now defines a `USER_PROFILES` dict with three distinct "normal" taste profiles plus four adversarial / edge-case profiles designed to see if the scoring logic in `score_song` could be tricked or produce unexpected results. The adversarial profiles were suggested by asking an AI coding assistant (given `recommender.py` and `main.py` for context) to propose edge cases likely to break a weighted-similarity scorer like this one: conflicting signals, out-of-range inputs, missing data, and values that don't exist in the catalog.
-
-Running `PYTHONPATH=src python src/main.py` from the project root produces the following output for all seven profiles:
-
-### High-Energy Pop (normal)
-
-```
-==================================================
-TOP RECOMMENDATIONS — High-Energy Pop
-==================================================
-Profile: {'genre': 'pop', 'mood': 'happy', 'energy': 0.9, 'valence': 0.85, 'danceability': 0.9, 'acousticness': 0.1, 'tempo': 128}
+Input profile: {'genre': 'pop', 'mood': 'happy', 'energy': 0.9, 'valence': 0.85,
+                 'danceability': 0.9, 'acousticness': 0.1, 'tempo': 128}
 
 1. Sunrise City (by Neon Echo)
    Score:   1.00
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match, genre match, mood match
-
-2. Gym Hero (by Max Pulse)
-   Score:   1.00
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match, genre match
-
-3. Pulse Horizon (by Kai Nakamura)
-   Score:   0.97
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match
-
-4. Rooftop Lights (by Indigo Parade)
-   Score:   0.94
-   Reasons: energy match, valence match, danceability match, tempo match, mood match
-
-5. Lagos Nights (by Ngozi Adeyemi)
-   Score:   0.94
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match
-
-==================================================
+   Reasons: energy match, valence match, danceability match, acousticness match,
+            tempo match, genre match, mood match
+   Explanation: "Sunrise City is a near-perfect match for your high-energy, happy
+   pop taste — it lines up with your preferred energy, valence, danceability,
+   acousticness, and tempo, and matches both your genre and mood."
 ```
 
-### Chill Lofi (normal)
+**2. Chill Lofi profile, no `ANTHROPIC_API_KEY` set (deterministic fallback):**
 
 ```
-==================================================
-TOP RECOMMENDATIONS — Chill Lofi
-==================================================
-Profile: {'genre': 'lofi', 'mood': 'relaxed', 'energy': 0.2, 'valence': 0.5, 'danceability': 0.3, 'acousticness': 0.7, 'tempo': 75}
+Input profile: {'genre': 'lofi', 'mood': 'relaxed', 'energy': 0.2, 'valence': 0.5,
+                 'danceability': 0.3, 'acousticness': 0.7, 'tempo': 75}
 
 1. Midnight Coding (by LoRoom)
    Score:   1.00
    Reasons: valence match, acousticness match, tempo match, genre match
-
-2. Library Rain (by Paper Lanterns)
-   Score:   1.00
-   Reasons: energy match, valence match, tempo match, genre match
-
-3. Focus Flow (by LoRoom)
-   Score:   0.99
-   Reasons: valence match, acousticness match, tempo match, genre match
-
-4. Still Waters (by Mei Lin Zhao)
-   Score:   0.91
-   Reasons: energy match, valence match, danceability match, tempo match
-
-5. Emerald Hills (by Siobhan O'Malley)
-   Score:   0.91
-   Reasons: energy match, valence match, danceability match, tempo match
-
-==================================================
+   Explanation: "Recommended based on: valence match, acousticness match, tempo
+   match, genre match."
 ```
 
-### Deep Intense Rock (normal)
+**3. Adversarial: Conflicting Energy/Mood (`mood: "sad"` paired with `energy: 0.9`)
+— shows the recommender taking the inputs at face value even when they contradict
+each other:**
 
 ```
-==================================================
-TOP RECOMMENDATIONS — Deep Intense Rock
-==================================================
-Profile: {'genre': 'rock', 'mood': 'intense', 'energy': 0.95, 'valence': 0.4, 'danceability': 0.4, 'acousticness': 0.05, 'tempo': 150}
-
-1. Storm Runner (by Voltline)
-   Score:   1.00
-   Reasons: energy match, valence match, acousticness match, tempo match, genre match, mood match
-
-2. Iron Reckoning (by Bjorn Eriksson)
-   Score:   0.93
-   Reasons: energy match, valence match, danceability match, acousticness match, tempo match
-
-3. Shadow Walk (by Tyrese Banks)
-   Score:   0.85
-   Reasons: energy match, valence match, acousticness match, tempo match
-
-4. Gym Hero (by Max Pulse)
-   Score:   0.85
-   Reasons: energy match, acousticness match, tempo match, mood match
-
-5. Night Drive Loop (by Neon Echo)
-   Score:   0.78
-   Reasons: valence match
-
-==================================================
-```
-
-### Adversarial: Conflicting Energy/Mood
-
-High `energy` (0.9) paired with `mood: "sad"` — a combination that shouldn't really occur together. Result: the model happily recommends high-energy, low-valence/low-mood-match songs near the top, since energy/valence/danceability dominate the weighted score and the small mood bonus (+0.05) isn't enough to pull in genuinely "sad-feeling" tracks. The system doesn't notice or flag the internal contradiction in the user's own preferences — it just optimizes the numbers it's given.
-
-```
-==================================================
-TOP RECOMMENDATIONS — Adversarial: Conflicting Energy/Mood
-==================================================
-Profile: {'genre': 'pop', 'mood': 'sad', 'energy': 0.9, 'valence': 0.1, 'danceability': 0.85, 'acousticness': 0.05, 'tempo': 140}
+Input profile: {'genre': 'pop', 'mood': 'sad', 'energy': 0.9, 'valence': 0.1,
+                 'danceability': 0.85, 'acousticness': 0.05, 'tempo': 140}
 
 1. Gym Hero (by Max Pulse)
    Score:   0.99
-   Reasons: energy match, danceability match, acousticness match, tempo match, genre match
-
-2. Sunrise City (by Neon Echo)
-   Score:   0.92
-   Reasons: energy match, danceability match, acousticness match, genre match
-
-3. Shadow Walk (by Tyrese Banks)
-   Score:   0.89
-   Reasons: energy match, danceability match, acousticness match, tempo match
-
-4. Storm Runner (by Voltline)
-   Score:   0.86
-   Reasons: energy match, acousticness match, tempo match
-
-5. Iron Reckoning (by Bjorn Eriksson)
-   Score:   0.85
-   Reasons: energy match, acousticness match
-
-==================================================
+   Reasons: energy match, danceability match, acousticness match, tempo match,
+            genre match
+   Explanation: "Gym Hero matches your target energy, danceability, acousticness,
+   tempo, and genre, though your stated mood doesn't factor as strongly into the
+   score as the numeric features do."
 ```
 
-### Adversarial: Out-of-Range Values
-
-Values outside the expected 0–1 scale (`energy: 1.5`, `valence: -0.3`, `danceability: 2.0`) and a `tempo` of 999 (far beyond the catalog's real range). Nothing in `score_song` validates or clamps these *inputs* before computing `1 - abs(song_value - user_value)`, so individual feature scores go negative and the final clamp (`max(0.0, min(1.0, total))`) floors nearly every song to **0.00**. Once everyone is tied at 0.00, the ranking falls back to whatever order `sorted()` happens to preserve (insertion order from the CSV), **not** the genre/energy tie-break described in "How The System Works" — that tie-break logic isn't actually implemented in `recommend_songs`, so this edge case exposes a gap between the documented design and the code.
-
-```
-==================================================
-TOP RECOMMENDATIONS — Adversarial: Out-of-Range Values
-==================================================
-Profile: {'genre': 'edm', 'mood': 'euphoric', 'energy': 1.5, 'valence': -0.3, 'danceability': 2.0, 'acousticness': 0.0, 'tempo': 999}
-
-1. Sunrise City (by Neon Echo)
-   Score:   0.00
-   Reasons: no strong matches
-
-2. Midnight Coding (by LoRoom)
-   Score:   0.00
-   Reasons: no strong matches
-
-3. Storm Runner (by Voltline)
-   Score:   0.00
-   Reasons: acousticness match
-
-4. Library Rain (by Paper Lanterns)
-   Score:   0.00
-   Reasons: no strong matches
-
-5. Gym Hero (by Max Pulse)
-   Score:   0.00
-   Reasons: acousticness match
-
-==================================================
-```
-
-### Adversarial: Empty Preferences
-
-An empty `{}` preferences dict — no genre, mood, or numeric targets at all. Every `if feature not in user_prefs` / `if "genre" in user_prefs` check short-circuits, so `total` stays `0.0` for *every* song and the "recommendations" are really just the first 5 rows of the CSV in file order. The system never tells the caller "I have nothing to go on" — it silently returns a confident-looking top-5 list with a score of 0.00, which could easily be mistaken for a real result if a caller doesn't check the score.
-
-```
-==================================================
-TOP RECOMMENDATIONS — Adversarial: Empty Preferences
-==================================================
-Profile: {}
-
-1. Sunrise City (by Neon Echo)
-   Score:   0.00
-   Reasons: no strong matches
-
-2. Midnight Coding (by LoRoom)
-   Score:   0.00
-   Reasons: no strong matches
-
-3. Storm Runner (by Voltline)
-   Score:   0.00
-   Reasons: no strong matches
-
-4. Library Rain (by Paper Lanterns)
-   Score:   0.00
-   Reasons: no strong matches
-
-5. Gym Hero (by Max Pulse)
-   Score:   0.00
-   Reasons: no strong matches
-
-==================================================
-```
-
-### Adversarial: Unknown Genre/Mood
-
-A `genre`/`mood` that doesn't exist anywhere in the catalog (`"death-polka"`, `"ecstatic-fear"`). The genre/mood bonus terms simply never fire (no row's `genre`/`mood` string can equal them), so the ranking degrades gracefully to pure feature-similarity on energy/valence/danceability/acousticness/tempo. This is actually the most "robust" of the adversarial cases — unlike the out-of-range or empty-dict cases, it still produces a sensible, differentiated ranking, because the numeric comparisons never depended on genre/mood existing in the first place.
-
-```
-==================================================
-TOP RECOMMENDATIONS — Adversarial: Unknown Genre/Mood
-==================================================
-Profile: {'genre': 'death-polka', 'mood': 'ecstatic-fear', 'energy': 0.5, 'valence': 0.5, 'danceability': 0.5, 'acousticness': 0.5, 'tempo': 110}
-
-1. Dust Road Letters (by Marcus Bellweather)
-   Score:   0.91
-   Reasons: energy match, valence match, danceability match
-
-2. Monsoon Heart (by Priya Nair)
-   Score:   0.89
-   Reasons: energy match, danceability match, acousticness match
-
-3. Tears in the Hallway (by Keisha Johnson)
-   Score:   0.88
-   Reasons: energy match, valence match, danceability match, acousticness match
-
-4. Midnight Coding (by LoRoom)
-   Score:   0.87
-   Reasons: energy match, valence match, danceability match
-
-5. Velvet Hours (by Jamal Whitfield)
-   Score:   0.86
-   Reasons: energy match, danceability match, acousticness match
-
-==================================================
-```
-
-**Takeaway**: the scoring function trusts its inputs completely — it has no input validation/clamping, no detection of self-contradictory preferences, and no real fallback when preferences are empty. The two most "trickable" cases were out-of-range values (collapses nearly everything to a 0.00 tie, falling back to silent insertion-order ranking instead of the documented tie-break rule) and empty preferences (returns a confident-looking but meaningless top-5). This is documented further in `model_card.md` under Limitations and Bias.
+More profiles, including out-of-range values and empty preferences, are logged in
+`logs/app.log` and summarized in `model_card.md`.
 
 ---
 
-## Experiments You Tried
+## Design Decisions
 
-### Sensitivity Test: Weight Shift (energy doubled, genre bonus halved)
+- **Pure content-based filtering over collaborative filtering**: with a small, fictional
+  catalog and no real user history to draw on, comparing a song's own features to a
+  user's stated preferences is the only signal actually available, so the system doesn't
+  pretend to do collaborative filtering it can't support.
+- **Separating the scoring rule from the retrieval/generation/verification pipeline**:
+  `recommender.py` only ever decides *which* songs to recommend and *why* (in a handful
+  of fixed, auditable reason strings). `explain.py` is a thin layer on top that turns
+  those reasons into prose — it never influences ranking. This keeps the core
+  recommendation logic deterministic and testable independent of whether an LLM is
+  available at all.
+- **Retrieval before generation**: the LLM is given a small, explicit set of retrieved
+  notes rather than being asked to freely describe a (fictional) song and artist. This
+  bounds what it's plausible for the model to say and makes the groundedness check
+  meaningful — there is a concrete, finite vocabulary to check against.
+- **A deterministic fallback is always available, never optional**: every failure mode
+  (no API key, network/API error, empty model output, failed groundedness check) routes
+  to the same `_deterministic_explanation()` function built directly from the computed
+  match reasons. The trade-off is a plainer, more mechanical explanation in those cases,
+  but it is always correct and never requires the LLM to be available — explanation
+  quality degrades gracefully instead of the app crashing or showing nothing.
+- **A fixed groundedness threshold (0.6) rather than per-call human review**: this makes
+  the acceptance gate automatic and testable (see `tests/test_explain.py`), at the cost of
+  being a blunter instrument than a human reviewer — a generated explanation that is true
+  but phrased unusually could, in principle, score below the threshold and get swapped
+  for the fallback unnecessarily.
 
-**Change made** (in `src/recommender.py`): doubled `energy`'s importance from `0.30` to `0.60` relative to the other four features, then renormalized all five `FEATURE_WEIGHTS` so they still sum to `1.0` (validity check — the base score has to stay a 0–1 similarity before bonuses are added, and the final clamp still floors/ceilings it to `[0, 1]`):
+---
 
-```python
-FEATURE_WEIGHTS = {
-    "energy": 0.4615,       # was 0.30
-    "valence": 0.1538,      # was 0.20
-    "danceability": 0.1538, # was 0.20
-    "acousticness": 0.1154, # was 0.15
-    "tempo": 0.1154,        # was 0.15
-}
-GENRE_BONUS = 0.075  # was 0.15 (halved)
-MOOD_BONUS = 0.05    # unchanged
-```
+## Testing Summary
 
-I asked my AI coding assistant to make this exact change and verify the weights still summed to ~1.0 and that no score could land outside `[0, 1]` — it confirmed the renormalized weights sum to `0.9999` (rounding) and that the existing `max(0.0, min(1.0, total))` clamp still handles the genre/mood bonuses pushing the total slightly over 1.0, so the math stays valid.
-
-**Result after re-running `src/main.py`:**
-
-- **High-Energy Pop / Deep Intense Rock** (profiles where the user's target energy was already extreme, 0.9–0.95): the #1 and #2 picks barely moved, since those songs were already near-perfect on every dial. But further down the list, songs that matched on energy but were weaker on the now-devalued genre bonus started displacing songs that previously won mostly on genre — e.g., in Deep Intense Rock, `Pulse Horizon` (an energy-heavy, non-rock track) pushed into the #5 slot by displacing `Night Drive Loop`.
-- **Chill Lofi** (a *low*-energy profile): scores dropped across the board (1.00 → 0.93 for the top pick) because energy now dominates the base score, but this profile's *target* energy is `0.2`, and no song is a perfect `energy == 0.2` match — so inflating energy's weight amplifies small energy mismatches instead of rewarding anything. The ranking also reshuffled: `Still Waters` and `Noche Eterna`-style energy-close tracks climbed, while genre-matching lofi tracks like `Focus Flow` slipped from #3 to #4.
-- **Adversarial: Conflicting Energy/Mood**: results got *more* skewed toward energy, not less — with genre's bonus halved, the already-dominant high-energy/low-valence tracks became even more entrenched at the top, since there was less of a genre-match counterweight to pull in anything else.
-- **Adversarial: Out-of-Range / Empty Preferences**: unchanged — these cases already collapse to a 0.00 tie regardless of how the weights are distributed, since the clamp floors everything before the weight ratios matter.
-
-**Was it more accurate or just different?** Mostly just *different*, not more accurate — and for one profile, arguably worse. Doubling energy's weight makes the system better at scoring profiles that *want* high energy (it rewards near-perfect energy matches even more strongly), but it actively hurts low-energy profiles like Chill Lofi: it punishes small, inevitable gaps between a song's energy and a target like `0.2` harder than before, pulling the ranking away from genre-consistent picks. This confirms the model card's existing bias note — fixed feature weights implicitly favor users whose taste "hinges on energy," and this experiment made that bias measurably stronger rather than fixing it. A per-user weighting scheme (letting the user say "I care more about mood/genre than energy") would be a better fix than any single global weight change.
+- **What worked**: the deterministic scoring and ranking logic (`recommender.py`) is
+  fully unit tested and behaves predictably, including the adversarial edge cases
+  (out-of-range values, empty preferences, unknown genre/mood) worked through in the
+  original Module 1–3 evaluation. The retrieval step (`retrieval.py`) and groundedness
+  scoring (`groundedness.py`) are both deterministic and unit tested offline. End-to-end,
+  the CLI and Streamlit app both run correctly with and without an `ANTHROPIC_API_KEY` set.
+- **What didn't work / had to be handled**: during testing, the Claude API call
+  occasionally returned a response with **no usable text content** (an empty
+  `response.content` of text blocks, typically tied to how the model used its available
+  output), which would otherwise have surfaced as a blank or broken explanation shown to
+  the user. `src/explain.py` now explicitly checks for this (`if not generated_text:`),
+  logs it as a warning, and swaps in the same deterministic fallback explanation used for
+  a missing API key or a failed call — this is directly tested in
+  `tests/test_explain.py`. The same fallback path also had to handle outright exceptions
+  (e.g. network errors) and ungrounded text (e.g. a fabricated fact like "recorded live in
+  Tokyo in 1998"), both of which are separately tested.
+- **What I learned**: an LLM call has at least three distinct failure modes that all look
+  different in code (no key, a raised exception, and a "successful" call that returns
+  nothing usable or something ungrounded), and each needs its own explicit check rather
+  than a single generic `try/except`. Building the fallback as the *default* path that
+  every failure mode routes to — rather than bolting it on only for exceptions — made the
+  system much easier to reason about and test, since "no LLM available" and "LLM available
+  but failed verification" end up producing the exact same safe behavior for the user.
 
 ---
 
 ## Reflection
 
-See [**Model Card**](model_card.md) for a deeper look at bias and limitations.
+Before this course started, I was worried about AI taking our jobs as software engineers. Though a part of it is true, I learned a deeper truth: we still need to learn how to code! AI is a good companion as it streamlines the coding process and help me generate ideas and summarize information but you still need to learn how to troubleshoot it. 
 
-<!-- TODO: 1-2 paragraphs on what you learned about how recommenders turn data into predictions, and where bias or unfairness could show up in systems like this. -->
+Problem-solving is still the key of software engineering and this is what sets apart an avid and amateur developers. 
+
+<!-- left intentionally empty -->

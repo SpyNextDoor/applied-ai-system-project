@@ -65,7 +65,7 @@ def _call_claude(prompt: str) -> str:
     client = anthropic.Anthropic()
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=600,
+        max_tokens=800,
         messages=[{"role": "user", "content": prompt}],
     )
     text = "".join(block.text for block in response.content if block.type == "text").strip()
