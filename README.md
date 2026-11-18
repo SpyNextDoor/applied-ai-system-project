@@ -102,6 +102,11 @@ high level:
 
 ## Sample Interactions
 
+> These are literal excerpts from a real run — see
+> [`execution_log.md`](execution_log.md) for the full, unedited transcript of all
+> seven profiles (including a live `ANTHROPIC_API_KEY` run and a `pytest` run),
+> committed as reproducible execution evidence.
+
 **1. High-Energy Pop profile, with `ANTHROPIC_API_KEY` set (grounded LLM explanation):**
 
 ```
@@ -112,9 +117,10 @@ Input profile: {'genre': 'pop', 'mood': 'happy', 'energy': 0.9, 'valence': 0.85,
    Score:   1.00
    Reasons: energy match, valence match, danceability match, acousticness match,
             tempo match, genre match, mood match
-   Explanation: "Sunrise City is a near-perfect match for your high-energy, happy
-   pop taste — it lines up with your preferred energy, valence, danceability,
-   acousticness, and tempo, and matches both your genre and mood."
+   Explanation: "Sunrise City" by Neon Echo is a pop song with a happy mood that
+   matches your preferences on every measure, including energy, danceability,
+   valence, acousticness, and tempo, for a perfect 1.00 score. It's described as
+   a bright, bouncy pop anthem that's good for starting the day on an upbeat note.
 ```
 
 **2. Chill Lofi profile, no `ANTHROPIC_API_KEY` set (deterministic fallback):**
@@ -123,11 +129,11 @@ Input profile: {'genre': 'pop', 'mood': 'happy', 'energy': 0.9, 'valence': 0.85,
 Input profile: {'genre': 'lofi', 'mood': 'relaxed', 'energy': 0.2, 'valence': 0.5,
                  'danceability': 0.3, 'acousticness': 0.7, 'tempo': 75}
 
-1. Midnight Coding (by LoRoom)
-   Score:   1.00
-   Reasons: valence match, acousticness match, tempo match, genre match
-   Explanation: "Recommended based on: valence match, acousticness match, tempo
-   match, genre match."
+1. Library Rain (by Paper Lanterns)
+   Score:   0.93
+   Reasons: energy match, valence match, tempo match, genre match
+   Explanation: "Recommended based on: energy match, valence match, tempo match,
+   genre match."
 ```
 
 **3. Adversarial: Conflicting Energy/Mood (`mood: "sad"` paired with `energy: 0.9`)
@@ -139,16 +145,15 @@ Input profile: {'genre': 'pop', 'mood': 'sad', 'energy': 0.9, 'valence': 0.1,
                  'danceability': 0.85, 'acousticness': 0.05, 'tempo': 140}
 
 1. Gym Hero (by Max Pulse)
-   Score:   0.99
+   Score:   0.95
    Reasons: energy match, danceability match, acousticness match, tempo match,
             genre match
-   Explanation: "Gym Hero matches your target energy, danceability, acousticness,
-   tempo, and genre, though your stated mood doesn't factor as strongly into the
-   score as the numeric features do."
+   Explanation: "Recommended based on: energy match, danceability match,
+   acousticness match, tempo match, genre match."
 ```
 
-More profiles, including out-of-range values and empty preferences, are logged in
-`logs/app.log` and summarized in `model_card.md`.
+More profiles, including out-of-range values and empty preferences, are captured
+in full in [`execution_log.md`](execution_log.md) and summarized in `model_card.md`.
 
 ---
 
