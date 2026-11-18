@@ -43,7 +43,7 @@ def get_songs():
 
 
 def main() -> None:
-    st.set_page_config(page_title="Music Recommender", page_icon="🎵", layout="centered")
+    st.set_page_config(page_title="MusiMist", page_icon="🎵", layout="centered")
     st.title("🎵 Music Recommender")
     st.caption("RAG-grounded song recommendations with AI-generated explanations.")
 
