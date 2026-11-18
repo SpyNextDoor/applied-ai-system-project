@@ -24,5 +24,8 @@
   "playful": "A playful mood is light and fun, often bright and bouncy in rhythm.",
   "tense": "A tense mood carries unresolved pressure, often through dissonance or driving aggression.",
   "anxious": "An anxious mood feels unsettled and uneasy, often irregular or dissonant in character.",
-  "uplifting": "An uplifting mood is positive and encouraging, usually warm with a gentle rise in energy."
+  "uplifting": "An uplifting mood is positive and encouraging, usually warm with a gentle rise in energy.",
+  "sad": "A sad mood carries low spirits and sorrow, typically slow-paced with minor-key melody and low valence.",
+  "hopeless": "A hopeless mood conveys despair and resignation, often sparse, low-energy, and devoid of resolution.",
+  "heartbroken": "A heartbroken mood expresses grief over lost love, usually slow and intimate with aching, vulnerable vocal delivery."
 }
