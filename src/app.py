@@ -44,7 +44,7 @@ def get_songs():
 
 def main() -> None:
     st.set_page_config(page_title="MusiMist", page_icon="🎵", layout="centered")
-    st.title("🎵 Music Recommender")
+    st.title("🎵 MusiMist")
     st.caption("RAG-grounded song recommendations with AI-generated explanations.")
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
